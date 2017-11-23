@@ -49,7 +49,8 @@ def receive_packets():
 
 	    doff_reserved = tcph[4]
 	    tcph_length = doff_reserved >> 4
-
+		
+	    print tcph[0],tcph[1],tcph[2],tcph[3],tcph[4],tcph[5],tcph[6],tcph[7],tcph[8]
 	    tcp_dict = {"source_port " : tcph[0], "dest_port" : tcph[1], "sequence": tcph[2], "ack":tcph[3], "length":tcph_length, "flags":tcph[5]}
 	    	 
 	    h_size = iph_length + tcph_length * 4
@@ -58,7 +59,7 @@ def receive_packets():
 	    #get data from the packet
 	    data = packet[h_size:]
 	     
-	    #print 'Data : ' + data
+	    print 'Data : ' + str(len(data))
 	    
 	    packet_dict={"ip_header" : ip_dict, "tcp_header" : tcp_dict, "data": data}
 
@@ -77,29 +78,42 @@ def process_packets():
 				processed_list.append(i)
 			# if fin or psh/fin(handle)
 			elif(i["tcp_header"]["flags"] == 17 or i["tcp_header"]["flags"] == 25):
+				if(len(i["data"]) > 0):
+					write_to_file(i["data"])
 				send_fin(i)
 				packets_list.remove(i)	
 				processed_list.append(i)
 			#if ack then delete drop packet from your sent list
 			# if psh/ack then store data and send ack 
-			elif(i["tcp_header"]["flags"] == 24):
-				#send ack for packet
-				send_ack(i)
+			elif(i["tcp_header"]["flags"] == 24 or i["tcp_header"]["flags"] == 16):
+
+				if(len(i["data"]) > 0):
+					write_to_file(i["data"])
+					print("hellllllllllllllllllllllllllllllllo")
+					send_ack(i)
 				packets_list.remove(i)	
 				processed_list.append(i)
 
-	
 
-
+def check_ack_status(ack):
+	for packet in processed_list:
+		if (ack == packet["tcp_header"]["ack"]):
+			return 1
+	return 0
+def write_to_file(data):
+	f = open('index.txt','a+')
+	f.write(data)
+	f.close	
 
 def send_ack(packet):
 	global user_data
+
 	user_data = ""
 	# update the sequence no. and ack no.
 	sender_seq = packet["tcp_header"]["sequence"]
 	sender_ack = packet["tcp_header"]["ack"]
 	update_tcp_flags(0,0,0,0,1,0)
-	update_seq_ack(sender_ack, sender_seq + 1)
+	update_seq_ack(sender_ack, sender_seq + len(packet["data"]))
 
 	# recompute headers
 	tcp_header = get_tcpheader()
@@ -117,8 +131,8 @@ def send_fin(packet):
 	# update the sequence no. and ack no.
 	sender_seq = packet["tcp_header"]["sequence"]
 	sender_ack = packet["tcp_header"]["ack"]
-	update_tcp_flags(1,0,0,0,0,0)
-	update_seq_ack(sender_ack, sender_seq + 1)
+	update_tcp_flags(1,0,0,0,1,0)
+	update_seq_ack(sender_ack, sender_seq + len(packet["data"]) + 1)
 
 	# recompute headers
 	tcp_header = get_tcpheader()
@@ -149,7 +163,7 @@ def send_ack_get(packet):
 	s.sendto(packet, (dest_ip , 0 ))
 	
 	#set get request and send the http packet
-	user_data = get_request('/cs653/index.html')
+	user_data = get_request('/cs653/a3.html')
 	update_tcp_flags(0,0,0,1,1,0)
 	tcp_header = get_tcpheader()
 	ip_header = get_ipheader()
@@ -176,6 +190,10 @@ def update_seq_ack(seq,ack):
     tcp_seq = seq
     global tcp_ack_seq
     tcp_ack_seq = ack
+
+def get_data_len(curr_data_acked):
+	global data_acked
+	return curr_data_acked - data_acked
 
 def get_ipheader():
    
@@ -279,8 +297,9 @@ processed_list = []
 source_ip = '10.0.2.15'
 dest_ip = socket.gethostbyname('www-edlab.cs.umass.edu')
 print("dest ip :" + dest_ip)
-data_acknowledged = 0
+data_acked = 0
 
+f =open("index.txt","w+")
 
 
 #ip header fields 
@@ -298,7 +317,7 @@ ip_daddr = socket.inet_aton(dest_ip)
 
 #tcp header fields 
 
-tcp_source = 5005   # source port
+tcp_source = 5009   # source port
 tcp_dest = 80   # destination port
 tcp_seq = 1234
 tcp_ack_seq = 0
