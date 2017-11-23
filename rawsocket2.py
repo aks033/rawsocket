@@ -3,6 +3,8 @@
  
 import socket, sys
 from struct import *
+
+packets_list =[]
  
 #create an INET, STREAMing socket
 try:
@@ -27,15 +29,25 @@ while True:
     version_ihl = iph[0]
     version = version_ihl >> 4
     ihl = version_ihl & 0xF
+    
+   # ip_tos = iph[1]
+   # ip_tot_len = iph[2]
      
-    iph_length = ihl * 4
-     
-    ttl = iph[5]
-    protocol = iph[6]
+    iph_length = ihl * 4	
+   # ip_id = iph[3]  # Id of this packet
+   # ip_frag_off = iph[4]
+   # ttl = iph[5]
+   # protocol = iph[6]
     s_addr = socket.inet_ntoa(iph[8]);
     d_addr = socket.inet_ntoa(iph[9]);
+    
+    ip_dict = {"ihl" : ihl, "version" : version, "tos" : iph[1], "total_length" : iph[2], "ip_id" : iph[3], "ip_frag_off" : iph[4], "ttl" : iph[5], "protocol" : iph[6], "source" : s_addr,"destination" : d_addr}
+
+    for index in ip_dict:
+    	print index + " : " + str(ip_dict[index])	
+
      
-    print 'Version : ' + str(version) + ' IP Header Length : ' + str(ihl) + ' TTL : ' + str(ttl) + ' Protocol : ' + str(protocol) + ' Source Address : ' + str(s_addr) + ' Destination Address : ' + str(d_addr)
+    #print 'Version : ' + str(version) + ' IP Header Length : ' + str(ihl) + ' TTL : ' + str(ttl) + ' Protocol : ' + str(protocol) + ' Source Address : ' + str(s_addr) + ' Destination Address : ' + str(d_addr)
      
     tcp_header = packet[iph_length:iph_length+20]
      
@@ -48,9 +60,14 @@ while True:
     acknowledgement = tcph[3]
     doff_reserved = tcph[4]
     tcph_length = doff_reserved >> 4
+    print("-----------------------------------------------------------------------------------------------------------------------------------")
+    tcp_dict = {"source_port " : tcph[0], "dest_port" : tcph[1], "sequence": tcph[2], "acknowledgement":acknowledgement, "length":tcph_length}
+    for index in tcp_dict:
+    	print index + " : " + str(tcp_dict[index])	
      
-    print 'Source Port : ' + str(source_port) + ' Dest Port : ' + str(dest_port) + ' Sequence Number : ' + str(sequence) + ' Acknowledgement : ' + str(acknowledgement) + ' TCP header length : ' + str(tcph_length)
-     
+    #	print 'Source Port : ' + str(source_port) + ' Dest Port : ' + str(dest_port) + ' Sequence Number : ' + str(sequence) + ' Acknowledgement : ' + str(acknowledgement) + ' TCP header length : ' + str(tcph_length)
+    print("-----------------------------------------------------------------------------------------------------------------------------------")
+    print("-----------------------------------------------------------------------------------------------------------------------------------")
     h_size = iph_length + tcph_length * 4
     data_size = len(packet) - h_size
      
@@ -58,4 +75,14 @@ while True:
     data = packet[h_size:]
      
     print 'Data : ' + data
-    print
+    
+    packet_dict={"ip_header" : ip_dict, "tcp_header" : tcp_dict, "data": data}
+
+    for index in packet_dict:
+    	print index + " : " + str(packet_dict[index]["tcp_header"][sequence])
+
+	
+    if packet_dict["ip_header"]["source"]== "104.20.37.43":
+    	packets_list.append(packet_dict) 
+    
+    print(packets_list)
