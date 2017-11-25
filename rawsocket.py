@@ -27,8 +27,7 @@ def receive_packets():
 	    ip_header = packet[0:20]
 	     
 	    #now unpack them :)
-	    iph = unpack('!BBHHHBBH4s4s' , ip_header)
-	     
+	    iph = unpack('!BBHHHBBH4s4s' , ip_header)	 
 	    version_ihl = iph[0]
 	    version = version_ihl >> 4
 	    ihl = version_ihl & 0xF
@@ -42,37 +41,42 @@ def receive_packets():
 
 	     
 	    tcp_header = packet[iph_length:iph_length+20]
+	    
 	     
 	    #now unpack them :)
-	    tcph = unpack('!HHLLBBHHH' , tcp_header)
-	     
+	    tcph = unpack('!HHLLBBHHH' , tcp_header) 
 
 	    doff_reserved = tcph[4]
 	    tcph_length = doff_reserved >> 4
 		
 	    print tcph[0],tcph[1],tcph[2],tcph[3],tcph[4],tcph[5],tcph[6],tcph[7],tcph[8]
-	    tcp_dict = {"source_port " : tcph[0], "dest_port" : tcph[1], "sequence": tcph[2], "ack":tcph[3], "length":tcph_length, "flags":tcph[5]}
-	    	 
+	    tcp_dict = {"source_port " : tcph[0], "dest_port" : tcph[1], "sequence": tcph[2], "ack":tcph[3], "length":tcph_length, "flags":tcph[5]}	 
 	    h_size = iph_length + tcph_length * 4
 	    data_size = len(packet) - h_size
-	     
 	    #get data from the packet
-	    data = packet[h_size:]
-	     
-	    print 'Data : ' + str(len(data))
+	    data = packet[h_size:] 
 	    
-	    packet_dict={"ip_header" : ip_dict, "tcp_header" : tcp_dict, "data": data}
+	    print 'Data : ' + str(len(data))
 
-		
+	    packet_dict={"ip_header" : ip_dict, "tcp_header" : tcp_dict, "data": data}	
+
+	    # check if the packet is in order or not		
 	    if packet_dict["ip_header"]["source"]== dest_ip:
-	    	packets_list.append(packet_dict)
-
+		if (check_tcp_checksum(tcph,data) or  check_ip_checksum(iph)):
+			if(tcp_ack_seq  == packet_dict["tcp_header"]["sequence"] or packet_dict["tcp_header"]["flags"]==18): #check
+		    		packets_list.append(packet_dict)
+				print("in 1")	
+			else:
+				packets_not_in_order.append(packet_dict)
+				print("in 2")
+	    	
 
 def process_packets():
 	while "true":
 		for i in packets_list:	
 			#if ack then call ack send function
 			if(i["tcp_header"]["flags"] == 18):
+				#update_data_acked(i["tcp_header"]["sequence"])
 				send_ack_get(i)
 				packets_list.remove(i)	
 				processed_list.append(i)
@@ -89,19 +93,20 @@ def process_packets():
 
 				if(len(i["data"]) > 0):
 					write_to_file(i["data"])
-					print("hellllllllllllllllllllllllllllllllo")
 					send_ack(i)
 				packets_list.remove(i)	
 				processed_list.append(i)
 
 
-def check_ack_status(ack):
-	for packet in processed_list:
-		if (ack == packet["tcp_header"]["ack"]):
-			return 1
-	return 0
+def update_data_acked(data):
+	global data_acked
+	data_acked = data
+
 def write_to_file(data):
-	f = open('index.txt','a+')
+	pos = data.find("\r\n\r\n")		
+	if pos != -1:	
+		data = data[pos:]
+	f = open(file_name,'a+')
 	f.write(data)
 	f.close	
 
@@ -191,9 +196,6 @@ def update_seq_ack(seq,ack):
     global tcp_ack_seq
     tcp_ack_seq = ack
 
-def get_data_len(curr_data_acked):
-	global data_acked
-	return curr_data_acked - data_acked
 
 def get_ipheader():
    
@@ -240,15 +242,34 @@ def get_tcpheader():
 
     psh = pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length);
     psh = psh + tcp_header + user_data;
-    print(psh)
+    #print(psh)
     tcp_check = checksum(psh)
-    print("tcp checksum is " +str(tcp_check)) 	
+    #print("tcp checksum is " +str(tcp_check)) 	
     #print("tcp flags are "+ str(tcp_flags))
     # make the tcp header again and fill the correct checksum - remember checksum is NOT in network byte order
     tcp_header_check = pack('!HHLLBBH', tcp_source, tcp_dest, tcp_seq, tcp_ack_seq, tcp_offset_res, tcp_flags, tcp_window) + pack('H', tcp_check) + pack('!H', tcp_urg_ptr)
 
     return tcp_header_check
 
+def check_tcp_checksum(tcph,data):
+	tcp_check_recvd = tcph[7]
+	tcp_header = pack('!HHLLBBHHH', tcph[0],tcph[1], tcph[2], tcph[3], tcph[4], tcph[5],tcph[6],0,tcph[8])
+	# pseudo header fields
+    	#source_address = socket.inet_aton(source_ip)
+    	#dest_address = socket.inet_aton(dest_ip)
+    	#placeholder = 0
+    	#protocol = socket.IPPROTO_TCP
+    	#tcp_length = len(tcp_header) + len(data)
+	#psh = pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length);
+        #psh = psh + tcp_header + data;
+	tcp_check = checksum(tcp_header)
+	return tcp_check_recvd==tcp_check
+	
+def check_ip_checksum(iph):
+	ip_check_recvd = iph[7]
+	ip_header = pack('!BBHHHBBH4s4s', iph[0], iph[1], iph[2], iph[3], iph[4], iph[5], iph[6], 0, iph[8], iph[9])	
+	ip_check = compute_header_checksum(ip_header)
+	return ip_check_recvd==ip_check
 
 def compute_header_checksum(header):
 		#checksum = 0
@@ -287,20 +308,28 @@ def checksum(message):
 
 
 def get_request(path):
+	create_file(path)
 	return "GET "+path+" HTTP/1.0\r\n\r\n"
 
+def create_file(path):
+	global file_name
+	pos = path.rfind("/")
+	if len(path) > pos + 1:
+		file_name = path[pos+1:]
+	else :
+		file_name = "index.html" 
+	f =open(file_name,"w+")
 
 #######################################################################################################################
 #######################################################################################################################
-packets_list =[]
-processed_list = []  
+packets_list = []
+processed_list = []
+packets_not_in_order = [] 
 source_ip = '10.0.2.15'
 dest_ip = socket.gethostbyname('www-edlab.cs.umass.edu')
 print("dest ip :" + dest_ip)
 data_acked = 0
-
-f =open("index.txt","w+")
-
+file_name = ""
 
 #ip header fields 
 ip_ihl = 5
@@ -317,7 +346,7 @@ ip_daddr = socket.inet_aton(dest_ip)
 
 #tcp header fields 
 
-tcp_source = 5009   # source port
+tcp_source = 5019  # source port
 tcp_dest = 80   # destination port
 tcp_seq = 1234
 tcp_ack_seq = 0
