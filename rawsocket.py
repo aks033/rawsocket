@@ -2,7 +2,8 @@ import socket, sys
 from struct import *
 from select import select
 import threading
-
+from datetime import datetime 
+from datetime import timedelta 
 
 # receiver to get all the packets
 
@@ -17,22 +18,20 @@ def receive_packets():
 	 
 	# receive a packet
 	while True:
-	    print(packets_list)
+	   # print(packets_list)
 	    packet = s.recvfrom(65565)
-	     
 	    #packet string from tuple
+
+	    global last_packet_time 
+	    last_packet_time = datetime.now()  	
 	    packet = packet[0]
-	     
 	    #take first 20 characters for the ip header
 	    ip_header = packet[0:20]
-	     
 	    #now unpack them :)
 	    iph = unpack('!BBHHHBBH4s4s' , ip_header)	 
 	    version_ihl = iph[0]
 	    version = version_ihl >> 4
 	    ihl = version_ihl & 0xF
-	    
-	     
 	    iph_length = ihl * 4	
 	    s_addr = socket.inet_ntoa(iph[8]);
 	    d_addr = socket.inet_ntoa(iph[9]);
@@ -49,43 +48,56 @@ def receive_packets():
 	    doff_reserved = tcph[4]
 	    tcph_length = doff_reserved >> 4
 		
-	    print tcph[0],tcph[1],tcph[2],tcph[3],tcph[4],tcph[5],tcph[6],tcph[7],tcph[8]
+	    #print tcph[0],tcph[1],tcph[2],tcph[3],tcph[4],tcph[5],tcph[6],tcph[7],tcph[8]
 	    tcp_dict = {"source_port " : tcph[0], "dest_port" : tcph[1], "sequence": tcph[2], "ack":tcph[3], "length":tcph_length, "flags":tcph[5]}	 
 	    h_size = iph_length + tcph_length * 4
 	    data_size = len(packet) - h_size
 	    #get data from the packet
 	    data = packet[h_size:] 
 	    
-	    print 'Data : ' + str(len(data))
+	    #print 'Data : ' + str(len(data))
 
 	    packet_dict={"ip_header" : ip_dict, "tcp_header" : tcp_dict, "data": data}	
 
 	    # check if the packet is in order or not		
 	    if packet_dict["ip_header"]["source"]== dest_ip:
 		if (check_tcp_checksum(tcph,data) or  check_ip_checksum(iph)):
-			if(tcp_ack_seq  == packet_dict["tcp_header"]["sequence"] or packet_dict["tcp_header"]["flags"]==18): #check
-		    		packets_list.append(packet_dict)
-				print("in 1")	
-			else:
-				packets_not_in_order.append(packet_dict)
-				print("in 2")
-	    	
+			#if(tcp_ack_seq  == packet_dict["tcp_header"]["sequence"] or packet_dict["tcp_header"]["flags"]==18): #check
+		    	packets_list.append(packet_dict)
+				#print("in 1")	
+			#else:
+			#	packets_not_in_order.append(packet_dict)
+				#print("in 2")
+	    #print(packets_list)	
 
 def process_packets():
-	while "true":
-		for i in packets_list:	
+	while (not fin_flag or len(packets_list)>0): # fin flag and list has packets 
+		 
+		i = get_next_packet()
+		if (not i and  len(packets_list) !=0):
+			print("i ", i)
+			print("len ", len(packets_list))
+			print packets_list	
+			#retransmit_ack()
+			print("retransmitting")
+		elif i:	
+			print("elseeeeeee")
 			#if ack then call ack send function
 			if(i["tcp_header"]["flags"] == 18):
 				#update_data_acked(i["tcp_header"]["sequence"])
 				send_ack_get(i)
-				packets_list.remove(i)	
+				packets_list.remove(i)
+				update_data_acked(i["tcp_header"]["sequence"])	#ghost byte
 				processed_list.append(i)
 			# if fin or psh/fin(handle)
 			elif(i["tcp_header"]["flags"] == 17 or i["tcp_header"]["flags"] == 25):
 				if(len(i["data"]) > 0):
 					write_to_file(i["data"])
 				send_fin(i)
+				global fin_flag
+				fin_flag = 1
 				packets_list.remove(i)	
+				update_data_acked(len(i["data"]))
 				processed_list.append(i)
 			#if ack then delete drop packet from your sent list
 			# if psh/ack then store data and send ack 
@@ -95,20 +107,33 @@ def process_packets():
 					write_to_file(i["data"])
 					send_ack(i)
 				packets_list.remove(i)	
+				update_data_acked(len(i["data"]))
 				processed_list.append(i)
+			
 
+def get_next_packet():
 
-def update_data_acked(data):
+	for i in packets_list:
+		print("----------------")
+		print(data_acked + 1, i["tcp_header"]["sequence"])
+		if (data_acked + 1 == i["tcp_header"]["sequence"] or i["tcp_header"]["flags"]==18):
+			return i 
+	return 0
+def update_data_acked(data_len):
 	global data_acked
-	data_acked = data
+	data_acked += data_len	
 
 def write_to_file(data):
 	pos = data.find("\r\n\r\n")		
 	if pos != -1:	
-		data = data[pos:]
+		data = data[pos+4:] #  for removing 2 spaces after the \r\n\r\n string 
 	f = open(file_name,'a+')
 	f.write(data)
 	f.close	
+
+def retransmit_ack():
+	#send ack	
+	s.sendto(packet, (dest_ip , 0 ))
 
 def send_ack(packet):
 	global user_data
@@ -151,6 +176,7 @@ def send_fin(packet):
 
 def send_ack_get(packet):
 	global user_data
+	print("here")
 	# update the sequence no. and ack no.
 	sender_seq = packet["tcp_header"]["sequence"]
 	sender_ack = packet["tcp_header"]["ack"]
@@ -320,8 +346,13 @@ def create_file(path):
 		file_name = "index.html" 
 	f =open(file_name,"w+")
 
-#######################################################################################################################
-#######################################################################################################################
+def check_timeout():
+	current_time = datetime.now()
+	while ((current_time - last_packet_time).total_seconds() > 120000):
+		current_time = datetime.now()
+	os.exit()
+##########################################################################################################################
+##########################################################################################################################
 packets_list = []
 processed_list = []
 packets_not_in_order = [] 
@@ -330,6 +361,8 @@ dest_ip = socket.gethostbyname('www-edlab.cs.umass.edu')
 print("dest ip :" + dest_ip)
 data_acked = 0
 file_name = ""
+fin_flag = 0
+
 
 #ip header fields 
 ip_ihl = 5
@@ -346,7 +379,7 @@ ip_daddr = socket.inet_aton(dest_ip)
 
 #tcp header fields 
 
-tcp_source = 5019  # source port
+tcp_source = 1246  # source port
 tcp_dest = 80   # destination port
 tcp_seq = 1234
 tcp_ack_seq = 0
@@ -369,6 +402,9 @@ threading.Thread(target=receive_packets).start()
 
 # create a processing thread 
 threading.Thread(target=process_packets).start()
+
+# create a timeout thread
+#threading.Thread(target=check_timeout).start()
 
 #create a raw socket
 try:
