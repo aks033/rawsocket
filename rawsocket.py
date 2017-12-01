@@ -1,3 +1,5 @@
+import os
+import random
 import socket, sys
 from struct import *
 from select import select
@@ -22,8 +24,6 @@ def receive_packets():
 	    packet = s.recvfrom(65565)
 	    #packet string from tuple
 
-	    global last_packet_time 
-	    last_packet_time = datetime.now()  	
 	    packet = packet[0]
 	    #take first 20 characters for the ip header
 	    ip_header = packet[0:20]
@@ -32,7 +32,8 @@ def receive_packets():
 	    version_ihl = iph[0]
 	    version = version_ihl >> 4
 	    ihl = version_ihl & 0xF
-	    iph_length = ihl * 4	
+	    iph_length = ihl * 4
+	    #print("length", iph_length)		
 	    s_addr = socket.inet_ntoa(iph[8]);
 	    d_addr = socket.inet_ntoa(iph[9]);
 	    
@@ -54,40 +55,46 @@ def receive_packets():
 	    data_size = len(packet) - h_size
 	    #get data from the packet
 	    data = packet[h_size:] 
-	    
+	    dup_check = check_dup_packet(iph[3])
 	    #print 'Data : ' + str(len(data))
+	    global last_packet_time 
+	    last_packet_time = datetime.now() 
 
+	    if data_enabled != 1:
+	    	if(data.find("\r\n\r\n") != -1):
+	    		print(data)
+		    	global data_enabled 
+		    	data_enabled = 1
+
+		update_congestion_window()
 	    packet_dict={"ip_header" : ip_dict, "tcp_header" : tcp_dict, "data": data}	
 
 	    # check if the packet is in order or not		
-	    if packet_dict["ip_header"]["source"]== dest_ip:
-		if (check_tcp_checksum(tcph,data) or  check_ip_checksum(iph)):
-			#if(tcp_ack_seq  == packet_dict["tcp_header"]["sequence"] or packet_dict["tcp_header"]["flags"]==18): #check
+	    if dup_check !=1 and packet_dict["ip_header"]["source"]== dest_ip and packet_dict["tcp_header"]["dest_port"] == tcp_source:
+		if (check_tcp_checksum(tcp_header,data) or  check_ip_checksum(iph)):
 		    	packets_list.append(packet_dict)
-				#print("in 1")	
-			#else:
-			#	packets_not_in_order.append(packet_dict)
-				#print("in 2")
-	    #print(packets_list)	
+				
 
 def process_packets():
-	while (not fin_flag or len(packets_list)>0): # fin flag and list has packets 
-		 
+	#threading.Thread(target=check_resend_packets()).start()
+	print(tcp_source)
+	while (not fin_flag or len(packets_list)>0): # fin flag not set and list has packets 
+		#print(packets_list)
+
 		i = get_next_packet()
-		if (not i and  len(packets_list) !=0):
-			print("i ", i)
-			print("len ", len(packets_list))
-			print packets_list	
-			#retransmit_ack()
-			print("retransmitting")
+
+		if (not i and  len(packets_list) !=0 and (current_time - last_packet_time).total_seconds() > 60 ):
+			#if(i["tcp_header"]["flags"]==18)
+			retransmit_ack()
+			#print("retransmitting")	
 		elif i:	
-			print("elseeeeeee")
 			#if ack then call ack send function
 			if(i["tcp_header"]["flags"] == 18):
 				#update_data_acked(i["tcp_header"]["sequence"])
+				drop_sent_packet(i['tcp_header']['ack'] -1)	#ghost byte 
 				send_ack_get(i)
 				packets_list.remove(i)
-				update_data_acked(i["tcp_header"]["sequence"])	#ghost byte
+				update_data_acked(i["tcp_header"]["sequence"])	
 				processed_list.append(i)
 			# if fin or psh/fin(handle)
 			elif(i["tcp_header"]["flags"] == 17 or i["tcp_header"]["flags"] == 25):
@@ -99,40 +106,75 @@ def process_packets():
 				packets_list.remove(i)	
 				update_data_acked(len(i["data"]))
 				processed_list.append(i)
-			#if ack then delete drop packet from your sent list
-			# if psh/ack then store data and send ack 
-			elif(i["tcp_header"]["flags"] == 24 or i["tcp_header"]["flags"] == 16):
 
+			#if ack then delete drop packet from your sent list
+			#if psh-ack/ack then store data and send ack 
+			elif(i["tcp_header"]["flags"] == 24 or i["tcp_header"]["flags"] == 16):
+				drop_sent_packet(i['tcp_header']['ack'])	
 				if(len(i["data"]) > 0):
 					write_to_file(i["data"])
 					send_ack(i)
 				packets_list.remove(i)	
 				update_data_acked(len(i["data"]))
 				processed_list.append(i)
-			
+		#else:
+			#print("checking for resend")
+		#	check_resend_packets()	
+	#
+	print(tcp_source)	
+	os._exit(0)	
 
-def get_next_packet():
+def drop_sent_packet(ack_no):
+	for i in sent_packets:
+		#print(i["sequence"],ack_no)
+		if i["sequence"]  == ack_no :	
+			sent_packets.remove(i)
+		
+def check_resend_packets():
+	for i in sent_packets:
+		#print (current_time - i["sent_time"]).total_seconds()
+		if((current_time - i["sent_time"]).total_seconds() > 60):
+				retransmit_sent_pckt(i["packet"])
+				print("sent packet again")
 
-	for i in packets_list:
-		print("----------------")
-		print(data_acked + 1, i["tcp_header"]["sequence"])
-		if (data_acked + 1 == i["tcp_header"]["sequence"] or i["tcp_header"]["flags"]==18):
-			return i 
+
+def retransmit_sent_pckt(packet):
+	s.sendto(packet, (dest_ip , 0 ))
+
+
+def check_dup_packet(packet_num):
+	for i in processed_list:
+		if (packet_num == i["ip_header"]["ip_id"]):
+			return 1	
 	return 0
+
+def get_next_packet():	
+#	print("seq needed" , data_acked + 1)
+	for i in packets_list:
+		
+		#print(data_acked + 1, i["tcp_header"]["sequence"])
+		if (data_acked + 1 == i["tcp_header"]["sequence"] or i["tcp_header"]["flags"]==18):
+			return i 		
+	return 0
+
 def update_data_acked(data_len):
 	global data_acked
-	data_acked += data_len	
+	data_acked += data_len
 
 def write_to_file(data):
-	pos = data.find("\r\n\r\n")		
-	if pos != -1:	
-		data = data[pos+4:] #  for removing 2 spaces after the \r\n\r\n string 
-	f = open(file_name,'a+')
-	f.write(data)
-	f.close	
+	#print(data)
+	
+	pos = data.find("\r\n\r\n")
+	if pos != -1:
+		data = data[pos+4:] 
+	if data_enabled == 1 and data.find("HTTP/1") == -1:
+		f = open(file_name,'a+')
+		f.write(data)
+		f.close	
 
-def retransmit_ack():
-	#send ack	
+def retransmit_sent_pcktack():
+	update_tcp_flags(0,0,0,0,1,0)
+	#send ack
 	s.sendto(packet, (dest_ip , 0 ))
 
 def send_ack(packet):
@@ -176,7 +218,6 @@ def send_fin(packet):
 
 def send_ack_get(packet):
 	global user_data
-	print("here")
 	# update the sequence no. and ack no.
 	sender_seq = packet["tcp_header"]["sequence"]
 	sender_ack = packet["tcp_header"]["ack"]
@@ -189,18 +230,23 @@ def send_ack_get(packet):
 
 	# compute packet
 	packet = ip_header + tcp_header + user_data 
-	
+
 	#send ack	
 	s.sendto(packet, (dest_ip , 0 ))
 	
 	#set get request and send the http packet
-	user_data = get_request('/cs653/a3.html')
+	user_data = get_request(path)
 	update_tcp_flags(0,0,0,1,1,0)
 	tcp_header = get_tcpheader()
 	ip_header = get_ipheader()
-	packet = ip_header + tcp_header + user_data		
+	packet = ip_header + tcp_header + user_data	
+
+	# append the packet int the sent_packets list 
+	packet_dict = {"sent_time" : datetime.now(), "sequence" : tcp_seq + len(user_data), "packet": packet}
+	sent_packets.append(packet_dict)
+
 	s.sendto(packet, (dest_ip , 0 ))
-	print("sent")
+	#print("sent")
 
 def update_tcp_flags(fin,syn,rst,psh,ack,urg):  
     global tcp_fin
@@ -230,7 +276,7 @@ def get_ipheader():
     #increment the packet id 	
     global ip_id 
     ip_id+=1 
-    print ip_id
+    #print ip_id
      			
     #clculate version+ ihl byte	
     ip_ihl_ver = (ip_ver << 4) + ip_ihl
@@ -238,13 +284,13 @@ def get_ipheader():
     # calculate total length
     ip_tot_len = sys.getsizeof(tcp_header+user_data)
     #print (tcp_header), 
-    print ip_tot_len
+    #print ip_tot_len
     # the ! in the pack format string means network order
     ip_header = pack('!BBHHHBBH4s4s', ip_ihl_ver, ip_tos, ip_tot_len, ip_id, ip_frag_off, ip_ttl, ip_proto, ip_check,ip_saddr, ip_daddr)
 	
     #recompute checksum
     ip_check = compute_header_checksum(ip_header)
-    print ip_check	
+    #print ip_check	
     ip_header_check = pack('!BBHHHBBH4s4s', ip_ihl_ver, ip_tos, ip_tot_len, ip_id, ip_frag_off, ip_ttl, ip_proto, ip_check,ip_saddr, ip_daddr)
     return ip_header_check
 
@@ -255,10 +301,10 @@ def get_tcpheader():
     tcp_check = 0
     global tcp_flags
     tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh <<3) + (tcp_ack << 4) + (tcp_urg << 5)
-    print tcp_fin, tcp_syn,tcp_rst, tcp_psh,tcp_ack,tcp_urg	
+    #print tcp_fin, tcp_syn,tcp_rst, tcp_psh,tcp_ack,tcp_urg	
     # the ! in the pack format string means network order
     tcp_header = pack('!HHLLBBHHH', tcp_source, tcp_dest, tcp_seq, tcp_ack_seq, tcp_offset_res, tcp_flags, tcp_window, tcp_check, tcp_urg_ptr)
-    print(tcp_header)	
+    #print(tcp_header)	
     # pseudo header fields
     source_address = socket.inet_aton(source_ip)
     dest_address = socket.inet_aton(dest_ip)
@@ -278,24 +324,35 @@ def get_tcpheader():
     return tcp_header_check
 
 def check_tcp_checksum(tcph,data):
-	tcp_check_recvd = tcph[7]
-	tcp_header = pack('!HHLLBBHHH', tcph[0],tcph[1], tcph[2], tcph[3], tcph[4], tcph[5],tcph[6],0,tcph[8])
-	# pseudo header fields
-    	#source_address = socket.inet_aton(source_ip)
-    	#dest_address = socket.inet_aton(dest_ip)
-    	#placeholder = 0
-    	#protocol = socket.IPPROTO_TCP
-    	#tcp_length = len(tcp_header) + len(data)
-	#psh = pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length);
-        #psh = psh + tcp_header + data;
+	tcp_check_recvd = unpack('H' , tcph[16:18])
+	#os._exit(1)
+		
+	tcp_header_16 = unpack('!HHLLBBH' , tcph[0:16])
+	tcp_header_offset = unpack('!H', tcph[18:20])
+	tcp_header = pack('!HHLLBBHHH', tcp_header_16[0],tcp_header_16[1], tcp_header_16[2], tcp_header_16[3], tcp_header_16[4], tcp_header_16[5],tcp_header_16[6], 0, tcp_header_offset[0])
+	
+	source_address = socket.inet_aton(source_ip)
+	dest_address = socket.inet_aton(dest_ip)
+	placeholder = 0
+	protocol = socket.IPPROTO_TCP
+	tcp_length = len(tcp_header) + len(data)
+
+	psh = pack('!4s4sBBH', source_address, dest_address, placeholder, protocol, tcp_length)
+	psh = psh + tcp_header + data;
 	tcp_check = checksum(tcp_header)
-	return tcp_check_recvd==tcp_check
+	#print("tcp checksum", tcp_check_recvd[0] , tcp_check)	
+	return tcp_check_recvd[0]==tcp_check
 	
 def check_ip_checksum(iph):
 	ip_check_recvd = iph[7]
 	ip_header = pack('!BBHHHBBH4s4s', iph[0], iph[1], iph[2], iph[3], iph[4], iph[5], iph[6], 0, iph[8], iph[9])	
 	ip_check = compute_header_checksum(ip_header)
 	return ip_check_recvd==ip_check
+
+def update_congestion_window():
+	global congestion_window
+	if congestion_window <1000:
+		congestion_window+=1
 
 def compute_header_checksum(header):
 		#checksum = 0
@@ -347,22 +404,46 @@ def create_file(path):
 	f =open(file_name,"w+")
 
 def check_timeout():
+	global current_time
 	current_time = datetime.now()
-	while ((current_time - last_packet_time).total_seconds() > 120000):
+	#print((current_time - last_packet_time).total_seconds())	
+	while ((current_time - last_packet_time).total_seconds() < 120):
+		#print((current_time - last_packet_time).total_seconds() , current_time, last_packet_time)
 		current_time = datetime.now()
-	os.exit()
+		check_resend_packets()
+	os._exit(0)
 ##########################################################################################################################
 ##########################################################################################################################
+
+# get command line arguments 
+if len(sys.argv) < 2:  
+	print("Usage : ./rawhttpget [URL]")
+	sys.exit(1)
+
+url_parsed = sys.argv[1].rpartition("//")
+pos = url_parsed[2].find("/")
+host = url_parsed[2][:pos]
+if host.find("www") != -1:
+	host_pos = host.find("www")
+	host = host[host_pos + 4:]
+
+path = url_parsed[2][pos:]
+print (host, path)
+
+sent_packets = []
 packets_list = []
 processed_list = []
 packets_not_in_order = [] 
 source_ip = '10.0.2.15'
-dest_ip = socket.gethostbyname('www-edlab.cs.umass.edu')
+dest_ip = socket.gethostbyname(host)
 print("dest ip :" + dest_ip)
 data_acked = 0
 file_name = ""
 fin_flag = 0
-
+last_packet_time = datetime.now()
+current_time = datetime.now()
+data_enabled = 0
+congestion_window = 1
 
 #ip header fields 
 ip_ihl = 5
@@ -379,7 +460,7 @@ ip_daddr = socket.inet_aton(dest_ip)
 
 #tcp header fields 
 
-tcp_source = 1246  # source port
+tcp_source = random.randint(1200, 5000)# source port
 tcp_dest = 80   # destination port
 tcp_seq = 1234
 tcp_ack_seq = 0
@@ -397,14 +478,15 @@ tcp_urg_ptr = 0
 tcp_offset_res = (tcp_doff << 4) + 0
 tcp_flags = tcp_fin + (tcp_syn << 1) + (tcp_rst << 2) + (tcp_psh <<3) + (tcp_ack << 4) + (tcp_urg << 5)
 
+
 # create a receiver thread
-threading.Thread(target=receive_packets).start()
+#threading.Thread(target=receive_packets).start()
 
 # create a processing thread 
 threading.Thread(target=process_packets).start()
 
 # create a timeout thread
-#threading.Thread(target=check_timeout).start()
+threading.Thread(target=check_timeout).start()
 
 #create a raw socket
 try:
@@ -416,8 +498,12 @@ except socket.error , msg:
 user_data = ''
 tcp_header = get_tcpheader()
 ip_header = get_ipheader()
-
 packet = ip_header + tcp_header + user_data
+
+# append the packet int the sent_packets list 
+packet_dict={"sent_time" : datetime.now(), "sequence" : tcp_seq + len(user_data), "packet": packet}
+sent_packets.append(packet_dict)
+
 s.sendto(packet, (dest_ip , 0 )) 
 ##############################################################################################################################
 ##############################################################################################################################
