@@ -20,7 +20,7 @@ def receive_packets():
 	# Continuously recieve packets. Drop them if they are duplicate otherwise add valid packets 
 	# to the packet_lists for further processing.  
 	while True:
-	   
+	    global data_enabled 
 	    packet = s.recvfrom(65565)
 	    #packet string from tuple
 
@@ -66,7 +66,7 @@ def receive_packets():
 	    if data_enabled != 1:
 	    	if(data.find("\r\n\r\n") != -1):
 	    		#print(data)
-		    	global data_enabled 
+		    	
 		    	data_enabled = 1
 
 		update_congestion_window()
@@ -80,8 +80,8 @@ def receive_packets():
 				
 
 def process_packets():
-
-	print(tcp_source)
+	global fin_flag
+	#print(tcp_source)
 	while (not fin_flag or len(packets_list)>0): # fin flag not set and list has packets 
 		#get the packet with the next sequence number
 		i = get_next_packet()
@@ -109,7 +109,7 @@ def process_packets():
 					write_to_file(i["data"])
 				#send back fin	
 				send_fin(i)
-				global fin_flag
+				
 				fin_flag = 1
 				#remove packet from the packets_list and add it to process_list
 				packets_list.remove(i)	
@@ -420,6 +420,13 @@ def check_timeout():
 		current_time = datetime.now()
 		check_resend_packets()
 	os._exit(0)
+
+def get_source_address():
+	so = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	so.connect(("8.8.8.8", 80))
+	addr = so.getsockname()[0]	
+	so.close()
+	return addr
 ##########################################################################################################################
 ##########################################################################################################################
 
@@ -436,14 +443,14 @@ if host.find("www") != -1:
 	host = host[host_pos + 4:]
 
 path = url_parsed[2][pos:]
-print (host, path)
+#print (host, path)
 
 
 sent_packets = [] #list to store sent packets
 packets_list = [] #list to store received packets
 processed_list = []# list to store processed packets
 
-source_ip = '10.0.2.15' 
+source_ip = get_source_address()#'10.0.2.15' 
 dest_ip = socket.gethostbyname(host)
 #print("dest ip :" + dest_ip)
 data_acked = 0
