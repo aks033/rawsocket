@@ -22,7 +22,7 @@
 		checksum(message): Computes checksum for the TCP header
 		get_request(path): Forms the get request to be sent to the destination to get the html or other form of information.
 		create_file(path): Creates the file to write data into.
-		check_timeout(): Keeps a constatnt check on the recieved packet and terminates the process if no packets are recieved for 3 minutes.
+		check_timeout(): Keeps a constatnt check on the recieved packet and terminates the process if no packets are recieved for 3 minutes. It also resend packets if acknowledment is not received within 1 minute.
 
 
 		Approach:
@@ -41,14 +41,14 @@
 		-A timeout thread constantly checks the difference between the last recieved packet and current time. If there is no packet transfer from the destination IP, then the program closes within 3 minutes 	
 
 		Window:
-		An advertised window of size 	
+		An advertised window of size of 5840 is maintained and the congestion window goes up by one everytime a packet is received. The maximum size of the congestion window in 1000.
+			
 #############################
 ### Challenges Faced: #######
 #############################
-	- Figuring out how to receive packets using raw sockets and understanding headers.  
+	- Figuring out how to receive and send packets using raw sockets   
 	- computing IP checksum 
-	- packing/unpacking headers
-	-  
+	- Understanding headers and packing/unpacking them
 
 #############################
 ####### How to run: #########
